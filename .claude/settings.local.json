@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv .venv)",
+      "Bash(./.venv/Scripts/python.exe -m pip install --upgrade pip -q)",
+      "Bash(./.venv/Scripts/python.exe -m pip install -r requirements.txt)",
+      "Bash(PYTHONPATH=\"d:/program_code/shangfei\" ./.venv/Scripts/python.exe /tmp/smoke_sql.py)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=\"d:/program_code/shangfei\" ./.venv/Scripts/python.exe -)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe samples/gen_sample_data.py)",
+      "Bash(./.venv/Scripts/python.exe -m pip install pytest -q)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m pytest tests/ -v)",
+      "Bash(./.venv/Scripts/python.exe -m pip install ruff -q)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check app/ tests/ samples/ --select F,E9)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check app/ tests/ samples/ --select F,E9 --fix)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8021 --log-level warning)",
+      "Bash(curl -s http://127.0.0.1:8021/health)",
+      "Bash(curl -s -X POST http://127.0.0.1:8021/api/v1/batches -F sql_dialect=mysql -F sql_files=@samples/customer_profile.sql -F sql_files=@samples/order_daily.sql -F data_files=@samples/customer_profile.csv -F data_files=@samples/order_daily.csv)",
+      "Bash(curl -s -w '\\\\nHTTP_STATUS=%{http_code}\\\\n' -X POST http://127.0.0.1:8021/api/v1/batches -F sql_dialect=mysql -F sql_files=@samples/customer_profile.sql -F data_files=@samples/customer_profile.csv)",
+      "Bash(bash tests/acceptance.sh http://127.0.0.1:8021)",
+      "Bash(curl -sS -X POST http://127.0.0.1:8021/api/v1/batches/__TRACKED_VAR__/start -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -c \"import sys;print\\(sys.stdin.read\\(\\)\\)\")",
+      "Bash(curl -sS -X POST http://127.0.0.1:8021/api/v1/batches/__TRACKED_VAR__/start -H 'Content-Type: application/json' -d '{\"resource_descriptions\":{\"customer_profile.sql\":\"hello\"}}' -w '\\\\nHTTP %{http_code}\\\\n')",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(curl -sS -X POST http://127.0.0.1:8021/api/v1/batches/__TRACKED_VAR__/start -H 'Content-Type: application/json' --data-binary @.tmp-body.json -w '\\\\nHTTP %{http_code}\\\\n')",
+      "Bash(curl -sS -o /dev/null \"http://127.0.0.1:8021/health\")",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8022 --log-level warning)",
+      "Bash(bash tests/acceptance.sh http://127.0.0.1:8022)",
+      "Bash(sed 's|^|  |')",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8023 --log-level warning)",
+      "Bash(bash tests/acceptance.sh http://127.0.0.1:8023)"
+    ]
+  }
+}

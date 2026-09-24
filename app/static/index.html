@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="数据资源描述解析与增强型 Agent 工作台"
+    />
+    <title>数据资源描述解析平台</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">DR</span>
+          <div>
+            <h1>数据资源描述解析平台</h1>
+            <p>SQL、数据画像与语义 Agent</p>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <div class="health-badge" id="healthBadge" data-state="loading">
+            <span class="health-dot" aria-hidden="true"></span>
+            <span id="healthText">连接中</span>
+          </div>
+          <div class="lookup">
+            <label class="sr-only" for="batchLookup">批次编号</label>
+            <input
+              id="batchLookup"
+              type="text"
+              autocomplete="off"
+              placeholder="载入批次编号"
+            />
+            <button class="button secondary compact" id="loadBatchButton" type="button">
+              载入
+            </button>
+          </div>
+          <a class="button ghost compact" href="/docs" target="_blank" rel="noreferrer">
+            API 文档
+          </a>
+        </div>
+      </header>
+
+      <main class="page">
+        <section class="upload-band" id="uploadSection">
+          <div class="section-title-row">
+            <div>
+              <span class="eyebrow">输入批次</span>
+              <h2>上传资源文件</h2>
+            </div>
+            <button
+              class="button ghost compact hidden"
+              id="toggleUploadButton"
+              type="button"
+            >
+              收起
+            </button>
+          </div>
+
+          <div class="upload-grid">
+            <div class="field-block dialect-block">
+              <label for="sqlDialect">SQL 方言</label>
+              <select id="sqlDialect">
+                <option value="mysql">MySQL</option>
+                <option value="postgresql">PostgreSQL</option>
+                <option value="hive">Hive</option>
+                <option value="spark">Spark SQL</option>
+                <option value="clickhouse">ClickHouse</option>
+                <option value="oracle">Oracle</option>
+                <option value="sqlserver">SQL Server</option>
+                <option value="duckdb">DuckDB</option>
+                <option value="sqlite">SQLite</option>
+                <option value="bigquery">BigQuery</option>
+                <option value="snowflake">Snowflake</option>
+              </select>
+            </div>
+
+            <div class="file-block">
+              <div class="dropzone" id="sqlDropzone">
+                <input
+                  class="sr-only"
+                  id="sqlFiles"
+                  type="file"
+                  accept=".sql"
+                  multiple
+                />
+                <div class="dropzone-copy">
+                  <strong>SQL 文件</strong>
+                  <span>支持多选，拖放上传</span>
+                </div>
+                <button class="button secondary compact" id="sqlPickButton" type="button">
+                  选择
+                </button>
+              </div>
+              <ul class="file-list" id="sqlFileList"></ul>
+            </div>
+
+            <div class="file-block">
+              <div class="dropzone" id="dataDropzone">
+                <input
+                  class="sr-only"
+                  id="dataFiles"
+                  type="file"
+                  accept=".csv,.tsv,.txt,.parquet,.pq,.xlsx,.xls,.jsonl,.ndjson,.json"
+                  multiple
+                />
+                <div class="dropzone-copy">
+                  <strong>数据文件</strong>
+                  <span>CSV、Parquet、Excel、JSON Lines</span>
+                </div>
+                <button class="button secondary compact" id="dataPickButton" type="button">
+                  选择
+                </button>
+              </div>
+              <ul class="file-list" id="dataFileList"></ul>
+            </div>
+          </div>
+
+          <div class="upload-actions">
+            <span class="inline-note" id="uploadHint">等待选择文件</span>
+            <button class="button primary" id="uploadButton" type="button">
+              上传并预览
+            </button>
+          </div>
+        </section>
+
+        <section class="workspace hidden" id="workspace">
+          <div class="workspace-header">
+            <div class="batch-identity">
+              <span class="eyebrow">当前批次</span>
+              <div class="batch-id-row">
+                <code id="batchIdText">-</code>
+                <button class="text-button" id="copyBatchButton" type="button">
+                  复制
+                </button>
+              </div>
+            </div>
+            <div class="batch-meta">
+              <span class="status-pill" id="batchStatusBadge">-</span>
+              <span class="batch-progress-label" id="batchProgressLabel">0 / 0</span>
+            </div>
+          </div>
+
+          <nav class="tabs" aria-label="工作台视图">
+            <button class="tab active" data-tab="config" type="button">
+              解析配置
+            </button>
+            <button class="tab" data-tab="results" type="button">
+              结果
+              <span class="tab-count" id="resultCount">0</span>
+            </button>
+            <button class="tab" data-tab="events" type="button">
+              Agent
+              <span class="tab-dot hidden" id="agentAttentionDot"></span>
+            </button>
+          </nav>
+
+          <section class="tab-panel active" id="tab-config">
+            <div class="config-layout">
+              <aside class="run-panel">
+                <div class="panel-section">
+                  <span class="field-label">运行模式</span>
+                  <div class="segmented" id="modeSelector">
+                    <label>
+                      <input type="radio" name="runMode" value="standard" />
+                      <span>标准解析</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="runMode" value="agent" checked />
+                      <span>增强 Agent</span>
+                    </label>
+                  </div>
+                </div>
+
+                <label class="check-row" id="requireApiRow">
+                  <input id="requireApiCheckbox" type="checkbox" checked />
+                  <span>
+                    <strong>强制云端 API</strong>
+                    <small>关闭后可降级为规则</small>
+                  </span>
+                </label>
+
+                <button class="button primary full" id="startRunButton" type="button">
+                  开始解析
+                </button>
+
+                <div class="progress-track" aria-hidden="true">
+                  <span id="progressBar"></span>
+                </div>
+
+                <div class="panel-section resource-panel">
+                  <div class="panel-heading">
+                    <span class="field-label">资源</span>
+                    <span id="resourceSummary">0</span>
+                  </div>
+                  <div class="resource-list" id="resourceList"></div>
+                </div>
+              </aside>
+
+              <div class="config-main">
+                <div class="empty-state hidden" id="configEmpty">
+                  <strong>没有可配置资源</strong>
+                  <span>请重新上传 SQL 与数据文件。</span>
+                </div>
+                <div id="configContent">
+                  <div class="resource-header">
+                    <div>
+                      <span class="eyebrow" id="selectedResourceCode">-</span>
+                      <h3 id="selectedResourceName">资源说明</h3>
+                    </div>
+                    <span class="pairing-pill" id="pairingPill">未配对</span>
+                  </div>
+
+                  <div class="form-grid two">
+                    <div class="field-block">
+                      <label for="pairingSelect">配对数据文件</label>
+                      <select id="pairingSelect"></select>
+                    </div>
+                    <div class="field-block">
+                      <label for="resourceDescription">资源描述</label>
+                      <textarea
+                        id="resourceDescription"
+                        rows="3"
+                        placeholder="填写资源的业务用途"
+                      ></textarea>
+                    </div>
+                  </div>
+
+                  <div class="field-table-head">
+                    <div>
+                      <span class="field-label">字段说明</span>
+                      <span class="inline-note" id="fieldCountText">0 个输出字段</span>
+                    </div>
+                    <button class="button ghost compact" id="expandFieldsButton" type="button">
+                      全部展开
+                    </button>
+                  </div>
+                  <div class="field-editor-list" id="fieldEditorList"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="tab-results">
+            <div class="empty-state" id="resultsEmpty">
+              <strong>暂无解析结果</strong>
+              <span>完成解析后，结果会显示在这里。</span>
+            </div>
+            <div id="resultsContent"></div>
+          </section>
+
+          <section class="tab-panel" id="tab-events">
+            <div class="events-layout">
+              <div class="event-column">
+                <div class="panel-heading">
+                  <h3>待确认项</h3>
+                  <span class="count-badge" id="reviewCount">0</span>
+                </div>
+                <div class="review-list" id="reviewList">
+                  <div class="empty-state small">
+                    <strong>暂无待确认项</strong>
+                    <span>Agent 运行后显示审查结果。</span>
+                  </div>
+                </div>
+              </div>
+              <div class="event-column">
+                <div class="panel-heading">
+                  <h3>执行轨迹</h3>
+                  <span class="count-badge" id="eventCount">0</span>
+                </div>
+                <div class="timeline" id="eventTimeline">
+                  <div class="empty-state small">
+                    <strong>暂无执行记录</strong>
+                    <span>增强 Agent 运行时记录关键步骤。</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
