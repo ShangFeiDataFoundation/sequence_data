@@ -254,6 +254,8 @@ class AgentInputFile(BaseModel):
     table_name: str | None = None
     schema_name: str | None = None
     database_name: str | None = None
+    database_type: str | None = None
+    database_display_name: str | None = None
     time_field: str | None = None
     time_start: datetime | None = None
     time_end: datetime | None = None
@@ -449,12 +451,25 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
+DatabaseType = Literal[
+    "mysql",
+    "mariadb",
+    "postgresql",
+    "sqlserver",
+    "sqlite",
+    "oracle",
+]
+
+
 class DatabaseConnectRequest(BaseModel):
-    host: str = Field(min_length=1, max_length=255)
-    port: int = Field(default=3306, ge=1, le=65535)
-    username: str = Field(min_length=1, max_length=128)
-    password: SecretStr = Field(min_length=1, max_length=512)
-    database: str = Field(min_length=1, max_length=128)
+    connection_name: str | None = Field(default=None, max_length=128)
+    database_type: DatabaseType = "mysql"
+    host: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    username: str | None = Field(default=None, max_length=128)
+    password: SecretStr | None = Field(default=None, max_length=512)
+    database: str = Field(min_length=1, max_length=1024)
+    schema_name: str | None = Field(default=None, max_length=128)
 
 
 class DatabaseColumnInfo(BaseModel):
@@ -474,7 +489,9 @@ class DatabaseTableInfo(BaseModel):
 
 class DatabaseConnectionResponse(BaseModel):
     connection_id: str
+    database_type: DatabaseType = "mysql"
     database_name: str
+    display_name: str = ""
     tables: list[DatabaseTableInfo] = Field(default_factory=list)
     expires_at: datetime
 

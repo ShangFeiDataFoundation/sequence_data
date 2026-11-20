@@ -1,10 +1,10 @@
 # 商飞统一资源解析 Agent
 
-项目从文件夹递归扫描数据文件，或连接 MySQL 并选择一个或多个数据表。Agent 自动识别
+项目从文件夹递归扫描数据文件，或连接数据库并选择一个或多个数据表。Agent 自动识别
 时序数据、普通结构化表和表结构定义，为每个文件、每张数据库表分别生成一份统一 JSON。
 
 ```text
-文件夹 / MySQL 数据表
+文件夹 / 数据库数据表
 → 递归扫描和自动分类
 → 时序统计特征或结构化字段画像
 → 每个资源单独调用 LLM
@@ -50,14 +50,17 @@ cd D:\program_code\shangfei
 
 浏览器不会提供本地文件夹的绝对路径，只会上传文件内容及其相对路径。
 
-#### MySQL 输入
+#### 数据库输入
 
-1. 选择“连接 MySQL”。
-2. 填写主机、端口、数据库、用户名和密码。
-3. 点击“连接并读取表”，勾选一个或多个数据表。
-4. 为每张表选择时间字段；无时间字段的表按普通结构化表解析。
-5. 可设置公共时间范围，最大读取行数固定不超过 500。
-6. 点击“启动解析”。
+支持 MySQL、MariaDB、PostgreSQL、SQL Server、SQLite 和 Oracle。
+
+1. 选择“数据库”。
+2. 选择数据库类型，填写连接名称、主机、端口、数据库、用户名和密码。
+3. SQLite 只需填写本地数据库文件路径。
+4. 点击“测试连接并读取表”，勾选一个或多个数据表。
+5. 为每张表选择时间字段；无时间字段的表按普通结构化表解析。
+6. 可设置公共时间范围，最大读取行数固定不超过 500。
+7. 点击“启动解析”。
 
 密码只保存在后端进程内存中，连接空闲 30 分钟后失效，进程重启后立即清除。密码不会
 写入运行结果、日志或前端页面。时间范围按数据库中的本地日期时间值进行比较。
@@ -139,7 +142,7 @@ relative_paths   与 files 顺序一致的文件夹相对路径，可重复
 sql_dialect      SQL DDL 方言，默认 mysql
 ```
 
-### MySQL
+### 数据库
 
 ```text
 POST /api/v1/database/connections
@@ -150,11 +153,23 @@ POST /api/v1/agent/runs/from-database
 
 ```json
 {
+  "connection_name": "生产只读库",
+  "database_type": "postgresql",
   "host": "127.0.0.1",
-  "port": 3306,
+  "port": 5432,
   "username": "reader",
   "password": "***",
   "database": "aircraft_monitor"
+}
+```
+
+SQLite 示例：
+
+```json
+{
+  "connection_name": "本地样例库",
+  "database_type": "sqlite",
+  "database": "D:/data/sensor.db"
 }
 ```
 
@@ -226,7 +241,8 @@ POST /api/v1/settings/model/save
 .\.venv\Scripts\python.exe samples\gen_comac_demo_samples.py
 ```
 
-`samples/comac_demo/` 中包含 5 个合成样例文件。所有飞机编号和传感器数据均为测试数据。
+`samples/comac_demo/` 中包含 6 个合成样例文件，既有发动机和液压时序数据，
+也有包含字符串、数值、布尔值和空值的机队宽表。所有飞机编号和业务数据均为测试数据。
 
 ## 测试
 

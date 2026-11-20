@@ -23,6 +23,23 @@ HYDRAULIC_COLUMNS = (
     "fluid_temperature_c",
     "pump_speed_rpm",
 )
+FLEET_COLUMNS = (
+    "aircraft_id",
+    "registration_no",
+    "aircraft_model",
+    "operator",
+    "base_airport",
+    "engine_model",
+    "maintenance_org",
+    "seat_count",
+    "max_takeoff_weight_kg",
+    "delivery_year",
+    "utilization_hours",
+    "maintenance_interval_cycles",
+    "fleet_region",
+    "is_active",
+    "remarks",
+)
 
 
 def phase_for(index: int) -> str:
@@ -247,11 +264,60 @@ CREATE TABLE engine_parameter_event (
     )
 
 
+def write_fleet_inventory() -> None:
+    """Generate a wide structured table without a time axis."""
+    path = OUTPUT_DIR / "fleet_inventory.csv"
+    models = (
+        ("C919-SYN", "C919", "C919 示范运营中心", "上海浦东", "LEAP-1C"),
+        ("ARJ21-SYN", "ARJ21", "支线航空示范中心", "成都双流", "CF34-10A"),
+    )
+    regions = ("华东", "西南", "华北")
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(FLEET_COLUMNS)
+        row_index = 0
+        for prefix, model, operator, base_airport, engine in models:
+            for index in range(1, 7):
+                row_index += 1
+                aircraft_id = f"{prefix}-{index:03d}"
+                is_active = "false" if row_index == 10 else "true"
+                maintenance_org = (
+                    ""
+                    if row_index in {5, 11}
+                    else f"{base_airport}维修中心"
+                )
+                remarks = (
+                    ""
+                    if row_index in {2, 8, 12}
+                    else "演示数据，仅用于结构化宽表解析测试"
+                )
+                writer.writerow(
+                    [
+                        aircraft_id,
+                        f"B-{9000 + row_index:04d}",
+                        model,
+                        operator,
+                        base_airport,
+                        engine,
+                        maintenance_org,
+                        164 if model == "C919" else 90,
+                        72500 if model == "C919" else 43500,
+                        2022 if model == "C919" else 2019,
+                        round(1200 + row_index * 137.5, 1),
+                        4800 if model == "C919" else 3600,
+                        regions[(row_index - 1) % len(regions)],
+                        is_active,
+                        remarks,
+                    ]
+                )
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     rng = random.Random(SEED)
     write_engine_readings(rng)
     write_hydraulic_readings(rng)
+    write_fleet_inventory()
     write_schema_files()
     print(OUTPUT_DIR)
 

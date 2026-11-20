@@ -581,6 +581,7 @@ a {
 }
 
 .database-form input,
+.database-form select,
 .database-limits input,
 .settings-field input,
 .series-selector select {
@@ -594,6 +595,7 @@ a {
 }
 
 .database-form input:focus,
+.database-form select:focus,
 .database-limits input:focus,
 .settings-field input:focus,
 .series-selector select:focus {
@@ -1046,7 +1048,7 @@ a {
 
 .resource-item {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
   width: 100%;
@@ -1174,7 +1176,7 @@ a {
 
 .metric-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin: 18px 0;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -1187,6 +1189,14 @@ a {
 
 .metric-cell + .metric-cell {
   border-left: 1px solid var(--line);
+}
+
+.metric-cell:nth-child(n + 4) {
+  border-top: 1px solid var(--line);
+}
+
+.metric-cell:nth-child(3n + 1) {
+  border-left: 0;
 }
 
 .metric-cell span {
@@ -1456,7 +1466,33 @@ a {
 }
 
 .batch-table {
-  min-width: 980px;
+  min-width: 2000px;
+}
+
+.batch-table th,
+.batch-table td {
+  white-space: nowrap;
+}
+
+.batch-table th:first-child,
+.batch-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 190px;
+  background: white;
+}
+
+.batch-table th:first-child {
+  z-index: 3;
+  background: #f7f9fb;
+}
+
+.batch-table td:nth-child(2) {
+  min-width: 320px;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .batch-table tbody tr {
@@ -1468,6 +1504,10 @@ a {
 }
 
 .batch-table tbody tr.active td {
+  background: #f0f7f6;
+}
+
+.batch-table tbody tr.active td:first-child {
   background: #f0f7f6;
 }
 
@@ -1951,12 +1991,15 @@ a {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .metric-cell:nth-child(3) {
+  .metric-cell:nth-child(odd) {
     border-left: 0;
-    border-top: 1px solid var(--line);
   }
 
-  .metric-cell:nth-child(4) {
+  .metric-cell:nth-child(even) {
+    border-left: 1px solid var(--line);
+  }
+
+  .metric-cell:nth-child(n + 3) {
     border-top: 1px solid var(--line);
   }
 

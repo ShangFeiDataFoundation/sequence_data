@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -12,6 +13,12 @@ from ...config import Settings
 
 class ResourceInputError(ValueError):
     """无法构成有效时序资源。"""
+
+
+_DATE_LIKE = re.compile(
+    r"(?:\b\d{4}[-/年]\d{1,2}(?:[-/月]\d{1,2})?\b|"
+    r"\b\d{1,2}:\d{2}(?::\d{2})?\b)"
+)
 
 
 @dataclass
@@ -33,6 +40,15 @@ def _detect_time_field(frame: pd.DataFrame, preferred: str | None) -> str:
         values = frame[column].dropna()
         if values.empty:
             continue
+        hint = 0.08 if any(
+            token in str(column).lower()
+            for token in ("time", "date", "dt", "ts", "timestamp", "时间", "日期")
+        ) else 0.0
+        date_shape_rate = float(
+            values.astype(str).str.contains(_DATE_LIKE, regex=True).mean()
+        )
+        if hint == 0.0 and date_shape_rate < 0.5:
+            continue
         converted = pd.to_datetime(
             values.astype(str),
             errors="coerce",
@@ -40,10 +56,6 @@ def _detect_time_field(frame: pd.DataFrame, preferred: str | None) -> str:
             utc=True,
         )
         rate = float(converted.notna().mean())
-        hint = 0.08 if any(
-            token in str(column).lower()
-            for token in ("time", "date", "dt", "ts", "timestamp", "时间", "日期")
-        ) else 0.0
         candidates.append((rate + hint, str(column)))
     if not candidates or max(candidates)[0] < 0.8:
         raise ResourceInputError("无法自动识别时间字段。")

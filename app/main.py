@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import agent_router, database_router, settings_router
 from .config import get_settings
+from .services.database_source import DATABASE_LABELS
 from .services.runtime_model_config import get_runtime_model_config
 
 logging.basicConfig(
@@ -34,7 +35,7 @@ DESCRIPTION = """
 app = FastAPI(
     title="Agent 统一资源解析平台",
     description=DESCRIPTION,
-    version="0.2.0",
+    version="0.3.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -81,7 +82,7 @@ def health() -> dict:
         "status": "ok",
         "agent_runs_dir": str(settings.agent_runs_dir),
         "statistical_features": True,
-        "database_sources": ["mysql"],
+        "database_sources": list(DATABASE_LABELS),
         "llm_configured": credentials.configured,
         "llm_source": credentials.source,
     }

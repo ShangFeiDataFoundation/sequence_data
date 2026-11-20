@@ -15,6 +15,14 @@ const SUPPORTED_EXTENSIONS = new Set([
 
 const PAGE_ORDER = ["upload", "parse", "semantic", "visual"];
 const HISTORY_PAGE_SIZE = 5;
+const DATABASE_TYPES = {
+  mysql: { label: "MySQL", port: 3306, placeholder: "数据库名称" },
+  mariadb: { label: "MariaDB", port: 3306, placeholder: "数据库名称" },
+  postgresql: { label: "PostgreSQL", port: 5432, placeholder: "数据库名称" },
+  sqlserver: { label: "SQL Server", port: 1433, placeholder: "数据库名称" },
+  sqlite: { label: "SQLite", port: null, placeholder: "例如：D:\\data\\sensor.db" },
+  oracle: { label: "Oracle", port: 1521, placeholder: "服务名或 SID" },
+};
 
 const state = {
   page: "upload",
@@ -71,9 +79,13 @@ const elements = {
   startButton: document.querySelector("#startButton"),
   folderSourcePanel: document.querySelector("#folderSourcePanel"),
   databaseSourcePanel: document.querySelector("#databaseSourcePanel"),
+  dbConnectionName: document.querySelector("#dbConnectionName"),
+  dbType: document.querySelector("#dbType"),
   dbHost: document.querySelector("#dbHost"),
   dbPort: document.querySelector("#dbPort"),
   dbName: document.querySelector("#dbName"),
+  dbDatabaseLabel: document.querySelector("#dbDatabaseLabel"),
+  dbSchema: document.querySelector("#dbSchema"),
   dbUser: document.querySelector("#dbUser"),
   dbPassword: document.querySelector("#dbPassword"),
   connectDatabaseButton: document.querySelector("#connectDatabaseButton"),
@@ -217,6 +229,27 @@ function kindLabel(kind) {
   }[kind] || kind || "资源";
 }
 
+function sourceTypeLabel(sourceType) {
+  return {
+    folder: "文件夹",
+    upload: "文件上传",
+    database: "数据库",
+  }[sourceType] || sourceType || "-";
+}
+
+function summarizeList(values, limit = 6) {
+  const items = (values || []).map((value) => String(value)).filter(Boolean);
+  if (!items.length) return "-";
+  if (items.length <= limit) return items.join("、");
+  return `${items.slice(0, limit).join("、")} 等 ${items.length} 项`;
+}
+
+function timeRangeLabel(report) {
+  const axis = report?.time_axis;
+  if (!axis?.start_time && !axis?.end_time) return "-";
+  return `${formatDate(axis.start_time, false)} 至 ${formatDate(axis.end_time, false)}`;
+}
+
 function statusLabel(status) {
   return {
     QUEUED: "排队中",
@@ -265,13 +298,6 @@ function reportMetricCount(report) {
     report?.statistics?.field_statistics?.length ||
     report?.schema_profile?.columns?.length ||
     0
-  );
-}
-
-function reportAnomalyCount(report) {
-  return (report?.statistics?.metric_summaries || []).reduce(
-    (total, item) => total + Number(item.anomaly_count || 0),
-    0,
   );
 }
 
@@ -369,14 +395,16 @@ function renderFolderFiles() {
 
 function updateUploadSummary() {
   elements.summarySource.textContent =
-    state.sourceMode === "database" ? "MySQL 数据表" : "文件夹";
+    state.sourceMode === "database"
+      ? `${databaseTypeLabel(elements.dbType.value)} 数据库`
+      : "文件夹";
   if (state.sourceMode === "database") {
     const count = elements.databaseTableList.querySelectorAll(
       "input[data-db-index]:checked",
     ).length;
     elements.summaryResourceCount.textContent = String(count);
     elements.uploadRunLabel.textContent = state.databaseConnection
-      ? `${state.databaseConnection.database_name} · ${count} 张表`
+      ? `${state.databaseConnection.display_name || state.databaseConnection.database_name} · ${count} 张表`
       : "未连接";
     return;
   }
@@ -400,20 +428,49 @@ function switchSource(mode) {
         : "等待选择数据源"
       : state.databaseConnection
         ? "数据库已连接"
-        : "填写 MySQL 连接信息";
+        : "填写数据库连接信息";
   updateUploadSummary();
 }
 
+function updateDatabaseType() {
+  const type = elements.dbType.value;
+  const config = DATABASE_TYPES[type] || DATABASE_TYPES.mysql;
+  const isSqlite = type === "sqlite";
+  document.querySelectorAll(".db-network-field").forEach((field) => {
+    field.classList.toggle("hidden", isSqlite);
+  });
+  elements.dbName.placeholder = config.placeholder;
+  elements.dbDatabaseLabel.textContent = isSqlite ? "数据库文件" : "数据库";
+  elements.dbPort.value = config.port ? String(config.port) : "";
+  elements.dbPort.disabled = isSqlite;
+  state.databaseConnection = null;
+  elements.databaseTables.classList.add("hidden");
+  updateUploadSummary();
+}
+
+function databaseTypeLabel(type) {
+  return DATABASE_TYPES[type]?.label || type || "数据库";
+}
+
 async function connectDatabase() {
+  const databaseType = elements.dbType.value;
+  const isSqlite = databaseType === "sqlite";
   const request = {
-    host: elements.dbHost.value.trim(),
-    port: Number(elements.dbPort.value || 3306),
+    connection_name: elements.dbConnectionName.value.trim() || null,
+    database_type: databaseType,
+    host: isSqlite ? null : elements.dbHost.value.trim(),
+    port: isSqlite ? null : Number(elements.dbPort.value || 0) || null,
     database: elements.dbName.value.trim(),
-    username: elements.dbUser.value.trim(),
-    password: elements.dbPassword.value,
+    username: isSqlite ? null : elements.dbUser.value.trim(),
+    password: isSqlite ? null : elements.dbPassword.value,
+    schema_name: isSqlite ? null : elements.dbSchema.value.trim() || null,
   };
-  if (!request.host || !request.database || !request.username || !request.password) {
-    toast("信息不完整", "请填写主机、数据库、用户名和密码。", "error");
+  if (!request.database) {
+    toast("信息不完整", isSqlite ? "请填写数据库文件路径。" : "请填写数据库名称。", "error");
+    return;
+  }
+  if (!isSqlite && (!request.host || !request.username || !request.password)) {
+    toast("信息不完整", "请填写主机、用户名和密码。", "error");
     return;
   }
   elements.connectDatabaseButton.disabled = true;
@@ -426,12 +483,17 @@ async function connectDatabase() {
     elements.dbPassword.value = "";
     elements.databaseTables.classList.remove("hidden");
     elements.databaseTableHint.textContent = `${
-      state.databaseConnection.database_name
+      state.databaseConnection.display_name ||
+      `${databaseTypeLabel(state.databaseConnection.database_type)} · ${state.databaseConnection.database_name}`
     } · ${state.databaseConnection.tables.length} 张表`;
     renderDatabaseTables();
     elements.uploadHint.textContent = "数据库已连接";
     updateUploadSummary();
-    toast("连接成功", "请选择需要解析的数据表。", "success");
+    toast(
+      "连接成功",
+      `${databaseTypeLabel(databaseType)} 已读取 ${state.databaseConnection.tables.length} 张表。`,
+      "success",
+    );
   } catch (error) {
     state.databaseConnection = null;
     elements.databaseTables.classList.add("hidden");
@@ -450,7 +512,15 @@ function renderDatabaseTables() {
     updateUploadSummary();
     return;
   }
-  const dateTypes = new Set(["date", "datetime", "timestamp", "time"]);
+  const dateTypes = new Set([
+    "date",
+    "datetime",
+    "datetime2",
+    "smalldatetime",
+    "timestamp",
+    "timestamptz",
+    "time",
+  ]);
   elements.databaseTableList.innerHTML = tables
     .map((table, index) => {
       const timeColumns = table.columns.filter((column) =>
@@ -522,7 +592,7 @@ function localDateTimeToIso(value) {
 
 async function startDatabaseRun() {
   if (!state.databaseConnection) {
-    toast("尚未连接", "请先连接 MySQL 并读取数据表。", "error");
+    toast("尚未连接", "请先连接数据库并读取数据表。", "error");
     return;
   }
   const tables = databaseSelections();
@@ -693,7 +763,6 @@ function renderResourceList(container) {
             <strong title="${esc(reportName(report))}">${esc(reportName(report))}</strong>
             <small>${esc(kindLabel(kind))} · ${formatNumber(reportRows(report))} 行</small>
           </span>
-          <span class="resource-state" title="${esc(statusLabel(report.overall_status || "COMPLETED"))}"></span>
         </button>`;
     })
     .join("");
@@ -758,7 +827,6 @@ function renderParseDetail(report) {
         <div><span>问题数量</span><strong>${formatNumber(quality.issue_count)}</strong></div>
         <div><span>实体字段</span><strong>${esc((report.entity_fields || []).join("、") || "-")}</strong></div>
         <div><span>指标字段</span><strong>${formatNumber(reportMetricCount(report))}</strong></div>
-        <div><span>异常数量</span><strong>${formatNumber(reportAnomalyCount(report))}</strong></div>
         <div><span>数据布局</span><strong>${esc(report.statistics?.layout || "-")}</strong></div>
       </div>
       ${
@@ -817,15 +885,15 @@ function renderParseDetail(report) {
         <div class="tag-row">
           <span class="tag teal">${esc(kindLabel(kind))}</span>
           <span class="tag">${esc(report.source?.file_format || "-")}</span>
-          <span class="tag">${esc(report.overall_status || "UNKNOWN")}</span>
         </div>
       </div>
-      <span class="status-pill" data-status="COMPLETED">${esc(statusLabel(report.overall_status || "COMPLETED"))}</span>
     </div>
     <div class="metric-strip">
+      <div class="metric-cell"><span>资源类型</span><strong>${esc(kindLabel(kind))}</strong></div>
       <div class="metric-cell"><span>数据行数</span><strong>${formatNumber(reportRows(report))}</strong></div>
       <div class="metric-cell"><span>字段数量</span><strong>${formatNumber(report.schema_profile?.column_count || 0)}</strong></div>
       <div class="metric-cell"><span>指标数量</span><strong>${formatNumber(reportMetricCount(report))}</strong></div>
+      <div class="metric-cell"><span>采样粒度</span><strong>${esc(timeAxis?.granularity || "-")}</strong></div>
       <div class="metric-cell"><span>完整率</span><strong>${formatPercent(quality.completeness)}</strong></div>
     </div>
     <div class="detail-tabs">
@@ -866,9 +934,6 @@ function renderSemanticPage() {
       <h2>${esc(reportName(report))}</h2>
       <p>${esc(report.summary || "模型未提供摘要。")}</p>
       <div class="tag-row">
-        <span class="status-pill" data-status="${esc(report.overall_status || "UNKNOWN")}">
-          ${esc(statusLabel(report.overall_status || "UNKNOWN"))}
-        </span>
         <span class="tag">${attributes.length} 个属性</span>
         <span class="tag">${recommendations.length} 条建议</span>
       </div>
@@ -935,29 +1000,55 @@ function renderVisualPage() {
 function renderBatchTable() {
   const head = `
     <tr>
-      <th>资源</th>
-      <th>类型</th>
+      <th>资源名称</th>
+      <th>相对路径</th>
+      <th>来源</th>
+      <th>格式</th>
+      <th>数据库类型</th>
+      <th>资源类型</th>
+      <th>数据布局</th>
       <th>数据行数</th>
-      <th>字段</th>
-      <th>指标</th>
+      <th>字段数</th>
+      <th>指标数</th>
+      <th>实体字段</th>
+      <th>指标字段</th>
+      <th>时间字段</th>
+      <th>采样粒度</th>
+      <th>时间范围</th>
       <th>完整率</th>
-      <th>异常</th>
-      <th>状态</th>
+      <th>质量问题</th>
+      <th>业务属性</th>
+      <th>建议</th>
+      <th>生成时间</th>
     </tr>`;
   elements.batchTable.querySelector("thead").innerHTML = head;
   elements.batchTable.querySelector("tbody").innerHTML = state.reports
     .map((report) => {
       const active = report.resource_id === state.selectedResourceId;
+      const source = report.source || {};
+      const timeAxis = report.time_axis;
       return `
         <tr class="${active ? "active" : ""}" data-resource-id="${esc(report.resource_id)}">
-          <td><strong>${esc(reportName(report))}</strong><br><small class="muted-inline">${esc(report.source?.relative_path || "-")}</small></td>
+          <td><strong>${esc(reportName(report))}</strong></td>
+          <td>${esc(source.relative_path || "-")}</td>
+          <td>${esc(sourceTypeLabel(source.source_type))}</td>
+          <td>${esc(String(source.file_format || "-").toUpperCase())}</td>
+          <td>${esc(source.database_type ? databaseTypeLabel(source.database_type) : "-")}</td>
           <td>${esc(kindLabel(report.classification?.data_kind))}</td>
+          <td>${esc(report.statistics?.layout || "-")}</td>
           <td>${formatNumber(reportRows(report))}</td>
           <td>${formatNumber(report.schema_profile?.column_count || 0)}</td>
           <td>${formatNumber(reportMetricCount(report))}</td>
+          <td>${esc(summarizeList(report.entity_fields))}</td>
+          <td>${esc(summarizeList(report.metric_fields))}</td>
+          <td>${esc(timeAxis?.timestamp_field || "-")}</td>
+          <td>${esc(timeAxis?.granularity || "-")}</td>
+          <td>${esc(timeRangeLabel(report))}</td>
           <td>${formatPercent(report.quality?.completeness)}</td>
-          <td>${formatNumber(reportAnomalyCount(report))}</td>
-          <td><span class="status-pill" data-status="${esc(report.overall_status || "UNKNOWN")}">${esc(statusLabel(report.overall_status || "UNKNOWN"))}</span></td>
+          <td>${formatNumber(report.quality?.issue_count || 0)}</td>
+          <td>${formatNumber((report.attributes || []).length)}</td>
+          <td>${formatNumber((report.recommendations || []).length)}</td>
+          <td>${esc(formatDate(report.generated_at))}</td>
         </tr>`;
     })
     .join("");
@@ -1176,17 +1267,51 @@ function downloadSummaryCsv() {
     return;
   }
   const rows = [
-    ["资源名称", "相对路径", "资源类型", "数据行数", "字段数", "指标数", "完整率", "异常数", "状态"],
+    [
+      "资源名称",
+      "相对路径",
+      "来源",
+      "格式",
+      "数据库类型",
+      "资源类型",
+      "数据布局",
+      "数据行数",
+      "字段数",
+      "指标数",
+      "实体字段",
+      "指标字段",
+      "时间字段",
+      "采样粒度",
+      "时间范围",
+      "完整率",
+      "质量问题",
+      "业务属性",
+      "建议",
+      "生成时间",
+    ],
     ...state.reports.map((report) => [
       reportName(report),
       report.source?.relative_path || "",
+      sourceTypeLabel(report.source?.source_type),
+      String(report.source?.file_format || "-").toUpperCase(),
+      report.source?.database_type
+        ? databaseTypeLabel(report.source.database_type)
+        : "-",
       kindLabel(report.classification?.data_kind),
+      report.statistics?.layout || "-",
       reportRows(report),
       report.schema_profile?.column_count || 0,
       reportMetricCount(report),
+      summarizeList(report.entity_fields),
+      summarizeList(report.metric_fields),
+      report.time_axis?.timestamp_field || "-",
+      report.time_axis?.granularity || "-",
+      timeRangeLabel(report),
       formatPercent(report.quality?.completeness),
-      reportAnomalyCount(report),
-      statusLabel(report.overall_status || "UNKNOWN"),
+      report.quality?.issue_count || 0,
+      (report.attributes || []).length,
+      (report.recommendations || []).length,
+      formatDate(report.generated_at),
     ]),
   ];
   const csv = `\ufeff${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
@@ -1397,6 +1522,7 @@ function bindEvents() {
   });
   elements.agentFiles.addEventListener("change", renderFolderFiles);
   elements.chooseFolderButton.addEventListener("click", () => elements.agentFiles.click());
+  elements.dbType.addEventListener("change", updateDatabaseType);
   elements.connectDatabaseButton.addEventListener("click", connectDatabase);
   elements.startButton.addEventListener("click", startRun);
   elements.refreshHistoryButton.addEventListener("click", loadHistory);
@@ -1435,6 +1561,7 @@ function bindEvents() {
 
 async function bootstrap() {
   bindEvents();
+  updateDatabaseType();
   renderFolderFiles();
   updateNavigation();
   checkHealth();

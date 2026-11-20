@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from contextlib import ExitStack
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ ENGINE = PROJECT_ROOT / "samples" / "comac_demo" / "engine_readings.csv"
 HYDRAULIC = PROJECT_ROOT / "samples" / "comac_demo" / "hydraulic_readings.csv"
 SCHEMA_CSV = PROJECT_ROOT / "samples" / "comac_demo" / "hydraulic_schema_columns.csv"
 SCHEMA_JSON = PROJECT_ROOT / "samples" / "comac_demo" / "flight_phase_schema.json"
+FLEET = PROJECT_ROOT / "samples" / "comac_demo" / "fleet_inventory.csv"
 API = "/api/v1/agent"
 LLM_CALLS: list[str] = []
 
@@ -204,6 +206,39 @@ def test_data_only_folder_builds_one_json_per_file(tmp_path, monkeypatch):
     }
 
 
+def test_wide_structured_demo_table_builds_structured_resource(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.parsing_agent.agent.build_llm_client",
+        lambda settings: _StubLLMClient(),
+    )
+    with _client(tmp_path, monkeypatch) as client, FLEET.open("rb") as handle:
+        started = client.post(
+            f"{API}/runs",
+            files=[("files", (FLEET.name, handle, "text/csv"))],
+        )
+        assert started.status_code == 202, started.text
+        run_id = started.json()["run_id"]
+        run = client.get(f"{API}/runs/{run_id}").json()
+        result = client.get(f"{API}/runs/{run_id}/result").json()
+
+    assert run["status"] == "COMPLETED"
+    report = result["reports"][0]
+    assert report["classification"]["data_kind"] == "structured_table"
+    assert report["statistics"]["layout"] == "structured_table"
+    assert report["schema_profile"]["column_count"] == 15
+    assert any(
+        column["data_type"] == "string"
+        for column in report["schema_profile"]["columns"]
+    )
+    assert any(
+        "时序解析降级为结构化表" in warning
+        for warning in report["processing"]["warnings"]
+    )
+
+
 def test_database_run_builds_one_json_per_selected_table(tmp_path, monkeypatch):
     engine_bytes = ENGINE.read_bytes()
     schema_csv_bytes = SCHEMA_CSV.read_bytes()
@@ -235,6 +270,15 @@ def test_database_run_builds_one_json_per_selected_table(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr("app.api.agent.fetch_table_csv", fake_fetch)
+    monkeypatch.setattr(
+        "app.api.agent.get_connection_metadata",
+        lambda connection_id: {
+            "connection_id": connection_id,
+            "database_type": "postgresql",
+            "database_name": "aircraft_monitor",
+            "display_name": "PostgreSQL · aircraft_monitor",
+        },
+    )
     monkeypatch.setattr(
         "app.services.parsing_agent.agent.build_llm_client",
         lambda settings: _StubLLMClient(),
@@ -268,6 +312,10 @@ def test_database_run_builds_one_json_per_selected_table(tmp_path, monkeypatch):
     )
     assert all(
         report["source"]["source_type"] == "database"
+        for report in result["reports"]
+    )
+    assert all(
+        report["source"]["database_type"] == "postgresql"
         for report in result["reports"]
     )
 
@@ -318,6 +366,72 @@ def test_database_connection_response_never_contains_password(monkeypatch):
     assert response.status_code == 200
     assert "do-not-return" not in response.text
     assert response.json()["tables"][0]["table_name"] == "sensor_reading"
+
+
+def test_sqlite_connection_discovery_and_database_run(tmp_path, monkeypatch):
+    db_path = tmp_path / "sensor.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE sensor_readings (
+                timestamp TEXT NOT NULL,
+                aircraft_id TEXT NOT NULL,
+                value REAL NOT NULL
+            )
+            """
+        )
+        connection.executemany(
+            "INSERT INTO sensor_readings VALUES (?, ?, ?)",
+            [
+                ("2026-01-01 00:00:00", "C919-SYN-001", 100.0),
+                ("2026-01-01 01:00:00", "C919-SYN-001", 101.5),
+                ("2026-01-01 02:00:00", "C919-SYN-001", 102.0),
+            ],
+        )
+    monkeypatch.setattr(
+        "app.services.parsing_agent.agent.build_llm_client",
+        lambda settings: _StubLLMClient(),
+    )
+    with _client(tmp_path, monkeypatch) as client:
+        connected = client.post(
+            "/api/v1/database/connections",
+            json={
+                "connection_name": "本地测试库",
+                "database_type": "sqlite",
+                "database": str(db_path),
+            },
+        )
+        assert connected.status_code == 200, connected.text
+        connection_payload = connected.json()
+        assert connection_payload["database_type"] == "sqlite"
+        assert connection_payload["display_name"] == "SQLite · 本地测试库"
+        table = connection_payload["tables"][0]
+        assert table["schema_name"] == "main"
+        assert table["table_name"] == "sensor_readings"
+        assert table["default_time_column"] == "timestamp"
+
+        started = client.post(
+            f"{API}/runs/from-database",
+            json={
+                "connection_id": connection_payload["connection_id"],
+                "max_rows": 500,
+                "tables": [
+                    {
+                        "schema_name": "main",
+                        "table_name": "sensor_readings",
+                        "time_column": "timestamp",
+                    }
+                ],
+            },
+        )
+        assert started.status_code == 202, started.text
+        run_id = started.json()["run_id"]
+        run = client.get(f"{API}/runs/{run_id}").json()
+        result = client.get(f"{API}/runs/{run_id}/result").json()
+
+    assert run["status"] == "COMPLETED"
+    assert result["reports"][0]["source"]["database_type"] == "sqlite"
+    assert result["reports"][0]["source"]["database_name"] == str(db_path)
 
 
 def test_legacy_business_routes_are_removed(tmp_path, monkeypatch):
@@ -554,3 +668,27 @@ def test_model_settings_api_never_returns_api_key(tmp_path, monkeypatch):
     assert response.json()["model"] == "test-model"
     assert response.json()["key_masked"] == "********"
     assert "secret-key-value" not in response.text
+
+
+def test_frontend_uses_common_result_attributes_and_database_types():
+    html = (PROJECT_ROOT / "app" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert "数据库类型" in html
+    for database_type in (
+        "mysql",
+        "mariadb",
+        "postgresql",
+        "sqlserver",
+        "sqlite",
+        "oracle",
+    ):
+        assert f'value="{database_type}"' in html
+    assert "异常数量" not in script
+    assert "<th>异常</th>" not in script
+    assert "<th>状态</th>" not in script
+    assert "业务属性" in script
+    assert "生成时间" in script

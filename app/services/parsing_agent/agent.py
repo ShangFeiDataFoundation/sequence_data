@@ -663,7 +663,11 @@ class ParsingAgent:
                 relative_path=info.get("relative_path") or info["name"],
                 file_format=info.get("format", ""),
                 file_size_bytes=int(info.get("size_bytes") or 0),
-                database_type="mysql" if source_type == "database" else None,
+                database_type=(
+                    info.get("database_type")
+                    if source_type == "database"
+                    else None
+                ),
                 database_name=info.get("database_name"),
                 schema_name=info.get("schema_name"),
                 table_name=info.get("table_name"),

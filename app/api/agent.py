@@ -28,7 +28,12 @@ from ..schemas import (
     UnifiedResourceReport,
 )
 from ..services import profiler
-from ..services.mysql_source import DatabaseSourceError, fetch_table_csv
+from ..services.database_source import (
+    DATABASE_LABELS,
+    DatabaseSourceError,
+    fetch_table_csv,
+    get_connection_metadata,
+)
 from ..services.parsing_agent import ParsingAgent
 from ..services.parsing_agent.storage import AgentRunNotFound, AgentRunStore
 from ..storage import new_id, safe_filename
@@ -183,7 +188,7 @@ async def start_run(
     "/runs/from-database",
     response_model=AgentRunSummary,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="从已连接的 MySQL 数据表启动统一解析",
+    summary="从已连接的数据库表启动统一解析",
     responses={400: {"model": ErrorResponse}, 413: {"model": ErrorResponse}},
 )
 def start_database_run(
@@ -195,6 +200,11 @@ def start_database_run(
     infos: list[dict] = []
     payloads: list[tuple[dict, bytes]] = []
     seen_tables: set[tuple[str, str]] = set()
+    try:
+        connection_meta = get_connection_metadata(request.connection_id)
+    except DatabaseSourceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    database_type = connection_meta["database_type"]
 
     for selection in request.tables:
         schema_name = selection.schema_name or ""
@@ -217,7 +227,10 @@ def start_database_run(
 
         schema_name = table_info.schema_name
         time_field = selection.time_column or table_info.default_time_column
-        relative_path = f"MySQL/{table_info.schema_name}/{table_info.table_name}"
+        relative_path = (
+            f"{DATABASE_LABELS.get(database_type, database_type)}/"
+            f"{table_info.schema_name}/{table_info.table_name}"
+        )
         info = {
             "file_id": new_id("file"),
             "name": f"{table_info.table_name}.csv",
@@ -227,9 +240,11 @@ def start_database_run(
             "relative_path": relative_path,
             "display_name": relative_path,
             "source_type": "database",
+            "database_type": database_type,
+            "database_display_name": connection_meta["display_name"],
             "table_name": table_info.table_name,
             "schema_name": schema_name,
-            "database_name": table_info.schema_name,
+            "database_name": connection_meta["database_name"],
             "time_field": time_field,
             "time_start": (
                 selection.time_start.isoformat() if selection.time_start else None
@@ -263,7 +278,15 @@ def start_database_run(
             info["name"],
             payload_by_id[info["file_id"]],
         )
-    store.update(run_id, sql_dialect="mysql")
+    sql_dialects = {
+        "mysql": "mysql",
+        "mariadb": "mysql",
+        "postgresql": "postgresql",
+        "sqlserver": "tsql",
+        "sqlite": "sqlite",
+        "oracle": "oracle",
+    }
+    store.update(run_id, sql_dialect=sql_dialects.get(database_type, database_type))
     background_tasks.add_task(ParsingAgent(store, settings).run, run_id)
     return _summary(store.load(run_id))
 
