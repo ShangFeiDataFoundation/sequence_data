@@ -1,0 +1,6 @@
+table_name,column_name,data_type,nullable,description
+hydraulic_sensor_catalog,aircraft_id,STRING,false,飞机编号
+hydraulic_sensor_catalog,sensor_id,STRING,false,液压传感器编号
+hydraulic_sensor_catalog,system_name,STRING,true,液压系统名称
+hydraulic_sensor_catalog,installation_position,STRING,true,安装位置
+hydraulic_sensor_catalog,rated_pressure_kpa,DOUBLE,true,额定压力

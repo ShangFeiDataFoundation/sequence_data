@@ -74,7 +74,7 @@ def load_dataframe(path: str | Path, settings: Settings | None = None) -> pd.Dat
             return pd.read_excel(path, nrows=limit, dtype=str)
         if suffix in JSONL_SUFFIXES:
             return _read_jsonl(path, limit)
-    except Exception as exc:  # noqa: BLE001 - 统一收敛为 ProfileError 交给上层标记失败
+    except Exception as exc:
         raise ProfileError(f"读取数据文件失败: {exc}") from exc
 
     raise ProfileError(
@@ -171,7 +171,7 @@ def profile_file(path: str | Path, settings: Settings | None = None) -> ProfileR
 
 def _profile_series(series: pd.Series, settings: Settings) -> FieldStatistics:
     """对单列做画像。"""
-    row_count = int(len(series))
+    row_count = len(series)
     if row_count == 0:
         return FieldStatistics(physical_type="unknown", row_count=0)
 
@@ -186,7 +186,7 @@ def _profile_series(series: pd.Series, settings: Settings) -> FieldStatistics:
         )
 
     distinct_count = int(non_null.nunique())
-    distinct_rate = _rate(distinct_count, int(len(non_null)))
+    distinct_rate = _rate(distinct_count, len(non_null))
     physical_type, numeric, temporal = _resolve_type(non_null)
 
     stats = FieldStatistics(
@@ -267,7 +267,7 @@ def _fill_text(stats: FieldStatistics, series: pd.Series) -> None:
     # 只有低基数字段才展开取值分布：高基数文本多为自由文本或标识，展开既不安全也无意义。
     if stats.distinct_count is not None and stats.distinct_count <= MAX_ENUM_DISTINCT:
         counts = series.astype(str).value_counts().head(TOP_VALUE_LIMIT)
-        total = int(len(series))
+        total = len(series)
         stats.top_values = [
             {"value": str(value), "count": int(count), "rate": _rate(int(count), total)}
             for value, count in counts.items()

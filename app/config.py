@@ -1,4 +1,4 @@
-"""平台配置。全部可通过环境变量覆盖，详见 .env.example。"""
+"""统一 Agent 解析流程配置。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,13 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+try:
+    from .local_secrets import LLM_API_BASE, LLM_API_KEY, LLM_MODEL
+except ImportError:  # pragma: no cover - 没有本地私有文件时使用环境变量
+    LLM_API_BASE = None
+    LLM_API_KEY = None
+    LLM_MODEL = None
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -18,45 +25,38 @@ class Settings(BaseSettings):
     )
 
     # ---- 存储 ----
-    # 每个批次一个子目录，内含上传原件、batch.json 与解析结果。
-    data_dir: Path = PROJECT_ROOT / "data" / "batches"
+    agent_runs_dir: Path = PROJECT_ROOT / "data" / "agent_runs"
 
     # ---- 上传限制 ----
-    max_sql_file_bytes: int = 2 * 1024 * 1024
+    max_schema_file_bytes: int = 2 * 1024 * 1024
     max_data_file_bytes: int = 512 * 1024 * 1024
+    max_folder_file_count: int = 2_000
+    max_folder_total_bytes: int = 1024 * 1024 * 1024
 
-    # ---- 数据画像（方案 §3.3） ----
-    # 统计最多读取 10 万行；展示与送模型的脱敏样例最多 20 行。
+    # ---- 数据画像 ----
     profile_max_rows: int = 100_000
     profile_max_examples: int = 20
-    # 真实数据少于该行数时在结果中标记 sample_size_warning。
     sample_size_warning_threshold: int = 1_000
 
-    # ---- 语义解析（方案 §4.3 / §4.4） ----
-    # 小模型置信度低于该值、或存在多个候选时，字段保留待确认状态。
-    semantic_confidence_threshold: float = 0.85
-    semantic_api_base: str | None = "https://api.deepseek.com/v1"
-    semantic_api_key: str | None = "sk-750d1e18ba734f34ad89e0e35c245a10"
-    semantic_model: str | None = "deepseek-flash"
-    semantic_timeout_seconds: float = 60.0
-    # 为 false 时强制使用规则实现，便于本地开发与离线联调。
-    semantic_enable_api: bool = True
+    # ---- 时序统计特征 ----
+    timeseries_max_points: int = 200_000
+    timeseries_min_points: int = 3
+    timeseries_anomaly_zscore: float = 3.5
+    timeseries_correlation_threshold: float = 0.6
 
-    # ---- 增强型 Agent ----
-    # 为 true 时 Agent 必须成功选择 API 提供方，否则直接失败而不是静默降级。
-    agent_require_api: bool = False
-    # 单次 Agent 运行最多保留的审查项数量。
-    agent_max_review_items: int = 500
+    # ---- LLM 最终结构化理解 ----
+    llm_api_base: str | None = LLM_API_BASE
+    llm_api_key: str | None = LLM_API_KEY
+    llm_model: str | None = LLM_MODEL
+    llm_enable_api: bool = True
+    llm_required: bool = True
+    llm_timeout_seconds: float = 60.0
+    llm_max_output_tokens: int = 8192
 
-    @property
-    def use_api_provider(self) -> bool:
-        """三项配置齐全且未被显式关闭时才走小模型 API。"""
-        return bool(
-            self.semantic_enable_api
-            and self.semantic_api_base
-            and self.semantic_api_key
-            and self.semantic_model
-        )
+    # ---- MySQL 数据源 ----
+    database_connection_ttl_seconds: int = 30 * 60
+    database_connect_timeout_seconds: int = 8
+    database_query_timeout_seconds: int = 30
 
 
 @lru_cache

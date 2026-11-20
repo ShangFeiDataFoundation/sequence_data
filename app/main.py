@@ -1,9 +1,9 @@
-"""数据资源描述解析平台 —— 应用入口。
+"""Agent 统一资源解析平台入口。
 
 启动：
-    .venv/Scripts/python.exe -m uvicorn app.main:app --reload
+    .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8031
 接口文档：
-    http://127.0.0.1:8000/docs
+    http://127.0.0.1:8031/docs
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import batches_router
+from .api import agent_router, database_router, settings_router
 from .config import get_settings
+from .services.runtime_model_config import get_runtime_model_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,24 +27,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DESCRIPTION = """
-将 SQL 文件及其对应真实数据解析为固定结构的数据资源描述。
-
-本期覆盖「上传数据、执行解析、读取解析结果」三个环节。
-
-- **AST 层**：SQLGlot 解析 SQL 结构、字段血缘，不调用模型
-- **数据画像层**：Pandas 计算物理类型、分布、枚举与标识字段，不调用模型
-- **语义层**：小模型 API 或规则实现补全业务语义，人工描述始终优先
+递归扫描文件夹或连接 MySQL，由 Agent 为每个文件、每张数据表分别执行解析、
+确定性特征提取和 LLM 语义理解，生成统一的资源 JSON。
 """
 
 app = FastAPI(
-    title="数据资源描述解析平台",
+    title="Agent 统一资源解析平台",
     description=DESCRIPTION,
-    version="0.1.0",
+    version="0.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
-# 后端不托管页面，预留 CORS 供独立前端联调。
+# 保留 CORS 供独立前端联调，同时托管内置工作台。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,7 +48,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(batches_router)
+
+@app.middleware("http")
+async def disable_frontend_cache(request: Request, call_next):
+    """页面和静态脚本始终重新校验，避免 HTML/JS 版本错配。"""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
+app.include_router(agent_router)
+app.include_router(database_router)
+app.include_router(settings_router)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -66,10 +76,14 @@ def index() -> FileResponse:
 @app.get("/health", tags=["meta"], summary="健康检查")
 def health() -> dict:
     settings = get_settings()
+    credentials = get_runtime_model_config().effective(settings)
     return {
         "status": "ok",
-        "semantic_provider": "openai_compatible" if settings.use_api_provider else "rule_based",
-        "data_dir": str(settings.data_dir),
+        "agent_runs_dir": str(settings.agent_runs_dir),
+        "statistical_features": True,
+        "database_sources": ["mysql"],
+        "llm_configured": credentials.configured,
+        "llm_source": credentials.source,
     }
 
 

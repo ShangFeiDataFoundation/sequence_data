@@ -1,240 +1,237 @@
-# 数据资源描述解析平台
+# 商飞统一资源解析 Agent
 
-把 SQL 文件及其对应真实数据解析为固定结构的数据资源描述。本期实现
-[技术实现方案](数据资源描述解析平台技术实现方案.md) 中的「上传数据、执行解析、读取解析结果」三个环节。
+项目从文件夹递归扫描数据文件，或连接 MySQL 并选择一个或多个数据表。Agent 自动识别
+时序数据、普通结构化表和表结构定义，为每个文件、每张数据库表分别生成一份统一 JSON。
 
-后端为 FastAPI 服务，并内置一个无需 Node 构建的单页工作台；同时保留
-`/docs` 与 curl 验收方式。
-
-在原有确定性解析流水线之上，项目新增了增强型 Agent 运行模式：Agent 负责
-选择语义提供方、编排 SQL 与数据解析、记录执行事件并汇总人工审查项。字段集合、
-统计结果和最终 JSON 仍由本地确定性工具产出。
-
-## 三层解析
-
-| 层 | 做什么 | 是否调用模型 |
-| --- | --- | --- |
-| AST 层 | SQLGlot 解析输出字段、来源表、关联、过滤、聚合、CTE 血缘 | 否 |
-| 数据画像层 | Pandas 统计物理类型、空值率、分布、枚举、标识字段、格式模式 | 否 |
-| 语义层 | 补全显示名、业务类型、标签、单位 | 是（可降级为规则） |
-
-只有语义层可调用小模型，且只接收字段名、SQL 表达式、来源表、类型、统计摘要、
-**脱敏样例**与人工描述；原始明细不外出。
-
-## 目录结构
-
-```
-app/
-  main.py                     # 应用入口、CORS、异常兜底
-  config.py                   # 全部配置项，环境变量可覆盖
-  schemas.py                  # 固定 JSON 结构（前端唯一契约）与接口模型
-  storage.py                  # 批次落盘：batch.json / uploads / results
-  api/batches.py              # 5 个接口
-  static/                     # 单页前端工作台
-    index.html
-    styles.css
-    app.js
-  services/
-    pairing.py                # 按主文件名自动配对
-    sql_parser.py             # AST 层
-    profiler.py               # 数据画像层
-    masking.py                # 样例脱敏
-    pipeline.py               # 三层合并，组装固定 JSON
-    semantic/
-      base.py                 # SemanticProvider 抽象与模型入参边界
-      rule_based.py           # RuleBasedProvider（离线）
-      openai_compatible.py    # OpenAICompatibleProvider（小模型 API）
-    agent/
-      orchestrator.py         # 增强型 Agent 状态机与执行编排
-      review.py               # 低置信度、字段错配等审查项
-samples/                      # 演示数据与生成脚本
-tests/                        # pytest 用例 + acceptance.sh 端到端验收
+```text
+文件夹 / MySQL 数据表
+→ 递归扫描和自动分类
+→ 时序统计特征或结构化字段画像
+→ 每个资源单独调用 LLM
+→ 一个资源生成一份 unified_resource_v1 JSON
+→ 四步工作台查看解析、语义、趋势与导出结果
 ```
 
-## 环境准备
-
-依赖装在项目内的 `.venv`，与系统 Python 及其他项目隔离。
-
-```bash
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt      # Windows
-# source .venv/bin/activate && pip install -r requirements.txt   # Linux/macOS
-```
+项目不使用 LSTM。时序分析由确定性统计计算完成，LLM 只负责在统计证据基础上生成
+业务语义属性和摘要。
 
 ## 启动
 
-```bash
-.venv/Scripts/python.exe -m uvicorn app.main:app --reload
+```powershell
+cd D:\program_code\shangfei
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8031
 ```
 
-- Web 工作台：<http://127.0.0.1:8000/>
-- 接口文档：<http://127.0.0.1:8000/docs>
-- 健康检查：<http://127.0.0.1:8000/health>
+访问：
 
-工作台覆盖文件拖放、批次载入、配对修正、资源/字段描述、标准解析、增强 Agent、
-实时状态、执行事件、待确认项和结构化结果查看。
+- 工作台：<http://127.0.0.1:8031/>
+- 健康检查：<http://127.0.0.1:8031/health>
+- API 文档：<http://127.0.0.1:8031/docs>
+
+如果依赖尚未安装：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+## 页面操作
+
+前端采用四步流程：数据接入、解析概览、语义分析、可视化。
+
+### 1. 数据接入
+
+#### 文件夹输入
+
+1. 选择“选择文件夹”。
+2. 选择一个目录，浏览器会递归扫描其中的文件。
+3. 支持的格式为 CSV、TSV、TXT、Parquet、XLSX、XLS、JSON、JSONL、SQL 和 DDL。
+4. 不支持的格式会忽略；允许任意文件组合，不要求同时存在时序文件和表结构文件。
+5. 点击“启动解析”。
+
+浏览器不会提供本地文件夹的绝对路径，只会上传文件内容及其相对路径。
+
+#### MySQL 输入
+
+1. 选择“连接 MySQL”。
+2. 填写主机、端口、数据库、用户名和密码。
+3. 点击“连接并读取表”，勾选一个或多个数据表。
+4. 为每张表选择时间字段；无时间字段的表按普通结构化表解析。
+5. 可设置公共时间范围，最大读取行数固定不超过 500。
+6. 点击“启动解析”。
+
+密码只保存在后端进程内存中，连接空闲 30 分钟后失效，进程重启后立即清除。密码不会
+写入运行结果、日志或前端页面。时间范围按数据库中的本地日期时间值进行比较。
+
+最近运行记录显示在数据接入页下方，可以恢复已完成结果，也可以只隐藏记录而不删除
+原始文件和解析结果。
+
+### 2. 解析概览
+
+左侧列出本次运行的全部资源，默认优先选择时序资源。右侧展示识别结论、字段结构、
+时间轴、数据质量和完整的 `unified_resource_v1` JSON。
+
+### 3. 语义分析
+
+左侧切换资源，右侧展示模型生成的摘要、结构化属性、置信度、证据引用和建议。模型
+在解析阶段随资源一起执行，语义分析页不重复发起模型请求。
+
+### 4. 可视化
+
+页面上方显示批量资源汇总，下方显示当前资源的指标趋势曲线。可以切换实体与指标序列，
+导出汇总 CSV、当前资源 JSON 或本次运行的全部结果 JSON。
+
+## 统一 JSON
+
+每个文件或数据库表对应一份 `unified_resource_v1` JSON，固定包含：
+
+```text
+schema_version
+report_id
+resource_id
+resource_type
+resource_name
+display_name
+source
+classification
+schema_profile
+time_axis
+entity_fields
+metric_fields
+quality
+statistics
+attributes
+summary
+overall_status
+recommendations
+relationships
+processing
+generated_at
+```
+
+- `classification.data_kind`：`time_series`、`structured_table` 或 `schema`。
+- `schema_profile`：行数、字段数、字段类型和主键候选。
+- `time_axis`：时间字段、起止时间、粒度和数据质量。
+- `statistics`：字段画像、趋势、周期、异常、变化点和相关性等确定性证据。
+- `attributes`：当前资源单独调用 LLM 后生成的结构化业务属性，最多保留 5 条；
+  超出部分会合并为一条“其他补充观察”。
+- `statistics.chart_series`：最多保留 8 条图表序列，每条序列最多 120 个采样点；
+  用于前端趋势图，不包含完整原始数据行。
+
+每份资源的完整 JSON 同时保存在：
+
+```text
+data/agent_runs/{run_id}/resources/{resource_id}.json
+```
 
 ## 接口
 
-| 方法 | 路径 | 作用 |
-| --- | --- | --- |
-| `POST` | `/api/v1/batches` | 上传 SQL 与数据文件，自动配对并返回字段预览 |
-| `POST` | `/api/v1/batches/{batchId}/start` | 提交 SQL/字段描述并启动完整解析 |
-| `GET` | `/api/v1/batches/{batchId}` | 查询解析进度和每份 SQL 的解析状态 |
-| `GET` | `/api/v1/batches/{batchId}/results` | 获取全部固定 JSON 解析结果 |
-| `GET` | `/api/v1/batches/{batchId}/results/{resourceCode}` | 获取指定 SQL 的固定 JSON |
-| `POST` | `/api/v1/batches/{batchId}/agent-runs` | 启动增强型 Agent |
-| `GET` | `/api/v1/batches/{batchId}/agent-runs/latest` | 查询最近一次 Agent 状态和审查项 |
-| `GET` | `/api/v1/batches/{batchId}/agent-runs/latest/events` | 查询最近一次 Agent 执行事件 |
+### 文件夹
 
-任务状态：`UPLOADED` → `PREVIEW_READY` → `PARSING` → `COMPLETED` / `FAILED`。
-前端在 `PREVIEW_READY` 展示配对与描述区，`COMPLETED` 后读结果。
-
-### 上传
-
-`multipart/form-data`，字段为 `sql_dialect`、`sql_files[]`、`data_files[]`、
-可选的 `mappings`（JSON 字符串，用于修正自动配对）。
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/batches \
-  -F "sql_dialect=mysql" \
-  -F "sql_files=@samples/customer_profile.sql" \
-  -F "data_files=@samples/customer_profile.csv"
+```text
+POST /api/v1/agent/runs
 ```
 
-返回 `batch_id`、自动配对结果与每份 SQL 的输出字段。SQL 语法错误会在这一步
-以 `parse_error` 暴露，不会等到解析阶段。
+请求类型为 `multipart/form-data`：
 
-### 启动解析
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/batches/{batchId}/start \
-  -H 'Content-Type: application/json' \
-  -d '{"resource_descriptions":{"customer_profile.sql":"客户画像汇总。"},
-       "field_descriptions":{"customer_profile.sql":{"customer_id":"客户唯一编号。"}}}'
+```text
+files            文件内容，可重复
+relative_paths   与 files 顺序一致的文件夹相对路径，可重复
+sql_dialect      SQL DDL 方言，默认 mysql
 ```
 
-> Windows 提示：`curl` 是原生程序，命令行里的非 ASCII 字符会被系统码页破坏。
-> 含中文的请求体请先写成 UTF-8 文件再 `--data-binary @body.json` 发送。
+### MySQL
 
-### 启动增强型 Agent
-
-先按下一节配置云端 API。增强型 Agent 默认允许在 API 不可用时降级为规则实现；
-如需确保结果一定来自云端模型，将 `AGENT_REQUIRE_API=true`，或在请求中传入
-`require_api: true`。
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/batches/{batchId}/agent-runs \
-  -H 'Content-Type: application/json' \
-  -d '{"resource_descriptions":{"customer_profile.sql":"客户画像汇总。"},
-       "field_descriptions":{"customer_profile.sql":{"customer_id":"客户唯一编号。"}},
-       "require_api":true}'
+```text
+POST /api/v1/database/connections
+POST /api/v1/agent/runs/from-database
 ```
 
-```bash
-curl http://127.0.0.1:8000/api/v1/batches/{batchId}/agent-runs/latest
-curl http://127.0.0.1:8000/api/v1/batches/{batchId}/agent-runs/latest/events
+连接请求示例：
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 3306,
+  "username": "reader",
+  "password": "***",
+  "database": "aircraft_monitor"
+}
 ```
 
-Agent 状态包括 `QUEUED`、`RUNNING`、`REVIEW_REQUIRED`、`COMPLETED` 和
-`FAILED`。`REVIEW_REQUIRED` 表示已产出结果，但存在低置信度字段、字段错配、
-解析警告或其他需要人工关注的问题。
+启动数据库解析示例：
 
-## 配置
-
-复制 `.env.example` 为 `.env`。关键项：
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `SEMANTIC_API_BASE` / `SEMANTIC_API_KEY` / `SEMANTIC_MODEL` | 空 | 三项齐全才启用小模型 |
-| `SEMANTIC_ENABLE_API` | `true` | 置 `false` 强制走规则实现 |
-| `SEMANTIC_CONFIDENCE_THRESHOLD` | `0.85` | 低于该值或存在多候选时字段置为待确认 |
-| `AGENT_REQUIRE_API` | `false` | 为 `true` 时 Agent 必须使用云端 API，否则失败 |
-| `AGENT_MAX_REVIEW_ITEMS` | `500` | 单次 Agent 运行最多保留的审查项 |
-| `DATA_DIR` | `./data/batches` | 批次落盘根目录 |
-| `PROFILE_MAX_ROWS` | `100000` | 画像统计最多读取行数 |
-| `PROFILE_MAX_EXAMPLES` | `20` | 脱敏样例最多保留条数 |
-| `SAMPLE_SIZE_WARNING_THRESHOLD` | `1000` | 少于该行数标记 `sample_size_warning` |
-
-未配置小模型时自动使用 `RuleBasedProvider`，可完全离线运行。
-
-## 语义提供方
-
-`SemanticProvider` 抽象接口有两个实现，由配置自动选择：
-
-- **`RuleBasedProvider`**：字段名词典 + 类型/表达式规则。置信度按
-  「整体名精确匹配 1.0 > 词元匹配 0.88 > 子串匹配 0.72」递减，
-  两条规则分差小于 0.08 时判为多候选，不武断取名。
-- **`OpenAICompatibleProvider`**：调用兼容 OpenAI 协议的 `/chat/completions`，
-  要求返回固定 JSON。契约不满足、网络异常、5xx 均降级为「无补全」，
-  4xx 不重试；同批次内相同字段只调用一次。
-
-### 合并优先级
-
-实现方案 §4.4 的约束集中在 `pipeline._build_fields`：
-
-1. 人工填写的资源描述与字段属性描述**永远优先**，`description_source` 标记来源；
-2. 模型只补充缺失的显示名、标签、单位，不覆盖人工描述；
-3. 字段集合**完全由 SQL 输出决定**（`SELECT *` 时退回数据文件表头），模型无法增删；
-4. 人工描述已明确含义时，歧义视为消解，不再标记待确认。
-
-## 固定 JSON 结构
-
-每个 SQL 产出 `results/{resource_code}.json`，结构见方案 §5，由
-`app/schemas.py` 的 `ResourceDescriptor` 定义。
-
-在方案原文之外，为满足 §4.1/§4.2 的其余要求，结果中**新增了若干字段**
-（均不改变原有字段的含义，前端可按原文忽略）：
-
-- `sql_summary` 增补 `source_tables`（含库/模式/表/别名）、`group_by`、
-  `aggregate_functions`、`window_functions`、`time_range_filters`、
-  `partition_filters`、`ctes`、`subqueries`、`parse_warnings`；
-- `profile` 增补 `data_file`、`column_count`、`unmatched_columns`、`missing_columns`；
-- `fields[]` 增补 `semantic_status`（`CONFIRMED` / `PENDING`）、`business_type`、
-  `tags`、`unit`、`description_source`；
-- 顶层增补 `sql_file`、`generated_at`、`semantic_provider`。
-
-`semantic_status` 承载方案 §4.3「置信度低于 0.85 或有多个候选时保留待确认状态」
-的落地结果。
-
-## 演示数据
-
-```bash
-.venv/Scripts/python.exe samples/gen_sample_data.py
+```json
+{
+  "connection_id": "dbc_xxx",
+  "max_rows": 500,
+  "tables": [
+    {
+      "schema_name": "aircraft_monitor",
+      "table_name": "engine_readings",
+      "time_column": "timestamp",
+      "time_start": "2026-03-01T00:00:00+08:00",
+      "time_end": "2026-03-05T00:00:00+08:00"
+    }
+  ]
+}
 ```
 
-只用标准库，固定随机种子，重复运行结果一致。产出两份可直接上传的资源：
+### 结果查询
 
-| 资源 | 行数 | 覆盖的结构 |
-| --- | --- | --- |
-| `customer_profile` | 1232 | CTE + LEFT JOIN + GROUP BY + 分区过滤，含空值、枚举、格式编码 |
-| `order_daily` | 1930 | 条件聚合 + 多列 GROUP BY + 日期字段 |
+```text
+GET  /api/v1/agent/runs
+GET /api/v1/agent/runs/{run_id}
+GET /api/v1/agent/runs/{run_id}/result
+GET /api/v1/agent/runs/{run_id}/resources/{resource_id}
+POST /api/v1/agent/runs/{run_id}/hide
+```
 
-两份都满足方案 §3.3 的「每份资源不少于 1000 行」。
+已完成的结果可以通过下列地址重新打开：
+
+```text
+http://127.0.0.1:8031/?run_id={run_id}
+```
+
+## LLM 配置
+
+LLM 使用 OpenAI 兼容的 `/chat/completions` 接口。每个资源单独调用一次。
+
+页面右上角的“模型设置”可以测试并保存当天使用的 API 地址、模型和密钥。密钥在
+Windows 下使用当前用户 DPAPI 加密，翌日自动失效；密钥不会进入资源 JSON、日志、
+历史记录或浏览器存储。
+
+```dotenv
+LLM_API_BASE=https://api.example.com/v1
+LLM_API_KEY=your-api-key
+LLM_MODEL=your-model
+LLM_ENABLE_API=true
+LLM_REQUIRED=true
+LLM_TIMEOUT_SECONDS=60
+```
+
+API Key 也可以放在本地且已被 Git 忽略的 `app/local_secrets.py` 中。未配置且
+`LLM_REQUIRED=true` 时，Agent 会明确失败。
+
+模型设置接口：
+
+```text
+GET  /api/v1/settings/model
+POST /api/v1/settings/model/test
+POST /api/v1/settings/model/save
+```
+
+## 样例
+
+```powershell
+.\.venv\Scripts\python.exe samples\gen_comac_demo_samples.py
+```
+
+`samples/comac_demo/` 中包含 5 个合成样例文件。所有飞机编号和传感器数据均为测试数据。
 
 ## 测试
 
-```bash
-.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
-.venv/Scripts/python.exe -m pytest tests/ -v          # 43 个用例
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check app tests
+node --check app\static\app.js
 ```
-
-对运行中的服务做一次完整验收：
-
-```bash
-.venv/Scripts/python.exe -m uvicorn app.main:app --port 8021
-bash tests/acceptance.sh http://127.0.0.1:8021
-```
-
-验收脚本覆盖：上传 → 预览 → 填描述 → 轮询 → 读全部/单份结果 → 脱敏检查 → 异常分支。
-
-## 运行产物
-
-```
-data/batches/{batch_id}/
-    batch.json             # 状态、配对、描述
-    uploads/               # 上传原件
-    results/{code}.json    # 固定 JSON 结果
-```
-
-`data/batches/` 已在 `.gitignore` 中排除。

@@ -1,8 +1,4 @@
-"""接口与解析结果的固定结构（方案 §5、§6）。
-
-ResourceDescriptor 是前端唯一依赖的契约；标注为「扩展」的字段是对方案
-原文的累加，不影响按原文渲染。所有比例类数值均为 0~1 的小数。
-"""
+"""当前统一 Agent 流程的固定数据契约。"""
 
 from __future__ import annotations
 
@@ -10,321 +6,488 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-
-# ---------------------------------------------------------------- 任务状态
-
-
-class BatchStatus(str, Enum):
-    """方案 §6 规定的前端轮询状态机。"""
-
-    UPLOADED = "UPLOADED"                    # 文件已落盘，尚未完成配对预览
-    PREVIEW_READY = "PREVIEW_READY"          # 配对与字段预览就绪，等待用户填描述并启动
-    PARSING = "PARSING"                      # 完整解析进行中
-    COMPLETED = "COMPLETED"                  # 全部资源解析成功
-    FAILED = "FAILED"                        # 批次级失败，或全部资源均失败
-
-
-class ResourceStatus(str, Enum):
-    PENDING = "PENDING"
-    PARSING = "PARSING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-
-
-class SemanticStatus(str, Enum):
-    """字段语义的确认状态。
-
-    CONFIRMED：来源明确（人工描述，或模型/规则置信度达标且无歧义）。
-    PENDING：模型置信度低于阈值，或存在多个候选，需人工确认（方案 §4.3）。
-    """
-
-    CONFIRMED = "CONFIRMED"
-    PENDING = "PENDING"
+from pydantic import BaseModel, Field, SecretStr
 
 
 class AgentRunStatus(str, Enum):
-    """增强型 Agent 的运行状态。"""
-
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
-    REVIEW_REQUIRED = "REVIEW_REQUIRED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
 
-class AgentReviewSeverity(str, Enum):
-    """质量审查项严重程度。"""
-
-    INFO = "INFO"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-
-
-# ---------------------------------------------------------------- 结果结构
-
-
-class JoinInfo(BaseModel):
-    """一条表关联（方案 §4.1、§5）。"""
-
-    type: str = Field(description="JOIN 类型，如 LEFT、INNER、RIGHT、FULL")
-    left_field: str | None = Field(default=None, description="左表关联字段，如 c.id")
-    right_field: str | None = Field(default=None, description="右表关联字段，如 o.customer_id")
-    condition: str | None = Field(default=None, description="完整 ON 条件原文")
-
-
-class SourceTableInfo(BaseModel):
-    """来源表明细（方案 §4.1 的库名/模式名/表名/别名，扩展字段）。"""
-
-    catalog: str | None = None
-    schema_: str | None = Field(default=None, alias="schema")
-    table: str
-    alias: str | None = None
-    qualified_name: str = Field(description="用于展示的限定名，如 dwd.customer")
-
-    model_config = {"populate_by_name": True}
-
-
-class SqlSummary(BaseModel):
-    """SQL 结构解析结果（方案 §4.1）。"""
-
-    dialect: str
-    has_aggregation: bool = False
-    filters: list[str] = Field(default_factory=list, description="WHERE / HAVING 条件原文")
-    joins: list[JoinInfo] = Field(default_factory=list)
-
-    # --- 扩展字段：方案 §4.1 要求但 §5 示例未展示的 AST 细节 ---
-    source_tables: list[SourceTableInfo] = Field(default_factory=list)
-    group_by: list[str] = Field(default_factory=list)
-    aggregate_functions: list[str] = Field(default_factory=list)
-    window_functions: list[str] = Field(default_factory=list)
-    time_range_filters: list[str] = Field(default_factory=list, description="识别出的时间范围条件")
-    partition_filters: list[str] = Field(default_factory=list, description="识别出的分区条件")
-    ctes: list[str] = Field(default_factory=list, description="CTE 名称列表")
-    subqueries: int = Field(default=0, description="子查询数量")
-    parse_warnings: list[str] = Field(default_factory=list)
+class TimeSeriesDecisionStatus(str, Enum):
+    AUTO_ACCEPTED = "AUTO_ACCEPTED"
+    AUTO_ACCEPTED_WITH_ALTERNATIVES = "AUTO_ACCEPTED_WITH_ALTERNATIVES"
+    UNRESOLVED = "UNRESOLVED"
+    AUTO_REJECTED = "AUTO_REJECTED"
 
 
 class FieldStatistics(BaseModel):
-    """字段级数据画像（方案 §4.2）。按字段类型填充对应分组，未涉及的保持 None。"""
+    """数据画像字段统计。"""
 
-    # 通用
     physical_type: str | None = None
     row_count: int | None = None
     null_count: int | None = None
     null_rate: float | None = None
     distinct_count: int | None = None
     distinct_rate: float | None = None
-
-    # 数值
     min: float | None = None
     max: float | None = None
     mean: float | None = None
     median: float | None = None
-    quantiles: dict[str, float] | None = Field(default=None, description="如 {'p25':..,'p50':..,'p75':..}")
-
-    # 日期时间
+    quantiles: dict[str, float] | None = None
     datetime_min: str | None = None
     datetime_max: str | None = None
     time_span_days: float | None = None
-
-    # 文本
     max_length: int | None = None
     avg_length: float | None = None
-    top_values: list[dict[str, Any]] | None = Field(default=None, description="高频值，如 [{'value':'A','count':12,'rate':0.3}]")
-    enum_candidates: list[str] | None = Field(default=None, description="枚举候选值，仅在小基数时给出")
-
-    # 标识字段
+    top_values: list[dict[str, Any]] | None = None
+    enum_candidates: list[str] | None = None
     is_identifier_candidate: bool = False
     duplicate_rate: float | None = None
-    format_pattern: str | None = Field(default=None, description="格式模式，如 'A-99-999'")
+    format_pattern: str | None = None
 
 
-class ResourceProfile(BaseModel):
-    """数据文件整体画像（方案 §5 的 profile 节点）。"""
-
-    row_count: int = 0
-    sampled_row_count: int = 0
-    sample_size_warning: bool = Field(default=False, description="真实数据少于 1000 行时为 true")
-    data_file: str | None = Field(default=None, description="扩展：配对到的数据文件名")
-    column_count: int | None = Field(default=None, description="扩展：数据文件列数")
-    unmatched_columns: list[str] = Field(default_factory=list, description="扩展：数据文件中 SQL 未输出的列")
-    missing_columns: list[str] = Field(default_factory=list, description="扩展：SQL 输出但数据文件缺失的列")
-
-
-class FieldDescriptor(BaseModel):
-    """输出字段描述（方案 §5 的 fields[] 元素）。"""
-
-    name: str
-    display_name: str | None = None
-    data_type: str | None = None
-    description: str | None = None
-    source_expression: str | None = Field(default=None, description="该字段对应的 SQL 表达式原文")
-    source_fields: list[str] = Field(default_factory=list, description="血缘：上游字段限定名列表")
-    statistics: FieldStatistics = Field(default_factory=FieldStatistics)
-    examples: list[str] = Field(default_factory=list, description="已脱敏样例，最多 20 个")
-    semantic_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-
-    # --- 扩展字段 ---
-    semantic_status: SemanticStatus = SemanticStatus.CONFIRMED
-    semantic_candidates: list[str] = Field(
-        default_factory=list,
-        description="语义命中存在歧义时的候选名称",
-    )
-    business_type: str | None = None
-    tags: list[str] = Field(default_factory=list)
-    unit: str | None = None
-    description_source: Literal["user", "model", "rule", "none"] = Field(
-        default="none", description="description 的来源，人工描述始终优先"
-    )
+class TimeSeriesTimeAxis(BaseModel):
+    timestamp_field: str
+    timezone: str = "UTC"
+    granularity: str | None = None
+    granularity_seconds: float | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    sample_count: int = 0
+    missing_interval_count: int = 0
+    duplicate_timestamp_count: int = 0
+    irregular_ratio: float = 0.0
 
 
-class ResourceDescriptor(BaseModel):
-    """一份 SQL 对应的完整解析结果（方案 §5）。前端仅依赖此结构渲染资源详情。"""
-
-    resource_id: str
-    resource_code: str
-    name: str | None = None
-    description: str | None = None
-    source_tables: list[str] = Field(default_factory=list, description="限定表名列表，如 ['dwd.customer']")
-    sql_summary: SqlSummary
-    profile: ResourceProfile = Field(default_factory=ResourceProfile)
-    tags: list[str] = Field(default_factory=list)
-    fields: list[FieldDescriptor] = Field(default_factory=list)
-
-    # --- 扩展字段 ---
-    sql_file: str | None = None
-    generated_at: datetime | None = None
-    semantic_provider: str | None = Field(default=None, description="实际使用的语义提供方名称")
+class TimeSeriesEntity(BaseModel):
+    entity_key: str
+    fields: list[str] = Field(default_factory=list)
+    values: dict[str, Any] = Field(default_factory=dict)
 
 
-# ---------------------------------------------------------------- 批次与接口
+class TimeSeriesMetricProfile(BaseModel):
+    count: int = 0
+    missing_count: int = 0
+    missing_rate: float = 0.0
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    median: float | None = None
+    std: float | None = None
+    first_value: float | None = None
+    last_value: float | None = None
+    absolute_change: float | None = None
+    relative_change: float | None = None
+    quantiles: dict[str, float] = Field(default_factory=dict)
 
 
-class ResourcePreview(BaseModel):
-    """上传后立即返回的字段预览（方案 §3.1）。"""
-
-    resource_code: str
-    sql_file: str
-    data_file: str | None = Field(default=None, description="自动配对到的数据文件，None 表示未配对")
-    matched_by: Literal["auto", "manual", "none"] = "none"
-    output_fields: list[str] = Field(default_factory=list, description="SQL 输出字段名")
-    parse_error: str | None = Field(default=None, description="SQL 解析失败时的原因，此时 output_fields 为空")
+class TimeSeriesTrend(BaseModel):
+    direction: Literal["UP", "DOWN", "FLAT"]
+    slope: float = 0.0
+    normalized_slope: float = 0.0
+    strength: float = Field(default=0.0, ge=0.0, le=1.0)
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
 
 
-class BatchCreatedResponse(BaseModel):
-    batch_id: str
-    status: BatchStatus
-    sql_dialect: str
-    resources: list[ResourcePreview] = Field(default_factory=list)
-    unmatched_data_files: list[str] = Field(default_factory=list, description="未配对到任何 SQL 的数据文件")
-    unmatched_sql_files: list[str] = Field(default_factory=list, description="未配对到数据文件的 SQL")
+class TimeSeriesSeasonality(BaseModel):
+    period_samples: int
+    period_seconds: float | None = None
+    period_label: str | None = None
+    autocorrelation: float
+    strength: float = Field(ge=0.0, le=1.0)
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
 
 
-class StartParsingRequest(BaseModel):
-    """启动完整解析（方案 §3.2）。键均为 SQL 文件名。"""
-
-    resource_descriptions: dict[str, str] = Field(
-        default_factory=dict, description="资源描述，如 {'customer_profile.sql': '...'}"
-    )
-    field_descriptions: dict[str, dict[str, str]] = Field(
-        default_factory=dict, description="字段属性描述，如 {'customer_profile.sql': {'customer_id': '...'}}"
-    )
-    mappings: dict[str, str] | None = Field(
-        default=None, description="启动前修正配对关系，值为数据文件名；值为空串表示解除配对"
-    )
-
-
-class AgentRunRequest(StartParsingRequest):
-    """启动增强型 Agent。"""
-
-    require_api: bool | None = Field(
-        default=None,
-        description="是否要求必须使用模型 API；为空时读取 AGENT_REQUIRE_API 配置",
-    )
-
-
-class AgentReviewItem(BaseModel):
-    """需要人工确认或关注的问题。"""
-
-    review_id: str
-    severity: AgentReviewSeverity
-    code: str
-    message: str
-    resource_code: str | None = None
-    field_name: str | None = None
-    evidence: dict[str, Any] = Field(default_factory=dict)
-
-
-class AgentEvent(BaseModel):
-    """Agent 执行轨迹。只记录动作和结果摘要，不保存模型内部思维链。"""
-
-    event_id: str
+class TimeSeriesChangePoint(BaseModel):
     timestamp: datetime
-    event_type: str
-    step: str
-    message: str
-    resource_code: str | None = None
-    data: dict[str, Any] = Field(default_factory=dict)
+    score: float
+    before_mean: float | None = None
+    after_mean: float | None = None
+    direction: Literal["UP", "DOWN"]
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
 
 
-class AgentRunResponse(BaseModel):
-    """增强型 Agent 当前状态。"""
+class TimeSeriesSegment(BaseModel):
+    state: Literal["LOW", "NORMAL", "HIGH"]
+    start_time: datetime
+    end_time: datetime
+    duration_seconds: float
+    mean: float
+    max: float
+    min: float
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
 
-    agent_run_id: str
-    batch_id: str
-    status: AgentRunStatus
+
+class TimeSeriesEvent(BaseModel):
+    event_type: Literal[
+        "SPIKE",
+        "DROP",
+        "HIGH_LOAD",
+        "LOW_LOAD",
+        "CHANGE_UP",
+        "CHANGE_DOWN",
+    ]
+    start_time: datetime
+    end_time: datetime
+    magnitude: float | None = None
+    direction: Literal["UP", "DOWN", "FLAT"]
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
+    evidence: list[str] = Field(default_factory=list)
+
+
+class TimeSeriesAnomaly(BaseModel):
+    start_time: datetime
+    end_time: datetime
+    score: float
+    observed_value: float
+    expected_value: float | None = None
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
+    evidence: list[str] = Field(default_factory=list)
+
+
+class TimeSeriesRelationship(BaseModel):
+    entity_key: str
+    from_metric: str
+    to_metric: str
+    relation_type: Literal["CO_MOVING", "LEADS", "LAGS"]
+    lag_samples: int = 0
+    correlation: float
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
+
+
+class StatisticalFeatureSet(BaseModel):
+    count: int = 0
+    valid_count: int = 0
+    missing_count: int = 0
+    missing_rate: float = 0.0
+    mean: float | None = None
+    median: float | None = None
+    std: float | None = None
+    variance: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    value_range: float | None = None
+    q1: float | None = None
+    q3: float | None = None
+    iqr: float | None = None
+    mad: float | None = None
+    coefficient_of_variation: float | None = None
+    skewness: float | None = None
+    kurtosis: float | None = None
+    zero_rate: float = 0.0
+    unique_rate: float = 0.0
+    first_value: float | None = None
+    last_value: float | None = None
+    absolute_change: float | None = None
+    relative_change: float | None = None
+    autocorrelation_lag1: float | None = None
+    rolling_volatility_mean: float | None = None
+    rolling_volatility_max: float | None = None
+
+
+class ResourceMetricFeature(BaseModel):
+    entity: TimeSeriesEntity
+    metric_id: str
+    feature_id: str
+    statistics: StatisticalFeatureSet
+    trend: TimeSeriesTrend | None = None
+    seasonalities: list[TimeSeriesSeasonality] = Field(default_factory=list)
+    change_points: list[TimeSeriesChangePoint] = Field(default_factory=list)
+    segments: list[TimeSeriesSegment] = Field(default_factory=list)
+    events: list[TimeSeriesEvent] = Field(default_factory=list)
+    anomalies: list[TimeSeriesAnomaly] = Field(default_factory=list)
+
+
+class ResourceQuality(BaseModel):
+    row_count: int = 0
+    entity_count: int = 0
+    metric_count: int = 0
+    completeness: float = 0.0
+    duplicate_timestamp_count: int = 0
+    irregular_ratio: float = 0.0
+    issues: list[str] = Field(default_factory=list)
+
+
+class ResourceChartPoint(BaseModel):
+    timestamp: datetime
+    value: float
+
+
+class ResourceChartSeries(BaseModel):
+    label: str
+    entity_ref: str
+    metric_id: str
+    points: list[ResourceChartPoint] = Field(default_factory=list)
+
+
+class StatisticalResourceDescriptor(BaseModel):
+    schema_version: str = "resource_statistical_features_v1"
+    resource_id: str
+    resource_name: str
+    source_file: str
+    layout: Literal["long", "wide"]
+    time_axis: TimeSeriesTimeAxis
+    entity_fields: list[str] = Field(default_factory=list)
+    value_fields: list[str] = Field(default_factory=list)
+    quality: ResourceQuality
+    features: list[ResourceMetricFeature] = Field(default_factory=list)
+    charts: list[ResourceChartSeries] = Field(default_factory=list)
+    correlations: list[TimeSeriesRelationship] = Field(default_factory=list)
+    analyzer: str = "statistical_features_v1"
+    generated_at: datetime
+
+
+class AgentInputFile(BaseModel):
+    file_id: str
+    name: str
+    role: Literal["timeseries", "schema", "structured_table"]
+    format: str
+    size_bytes: int = 0
+    relative_path: str | None = None
+    source_type: Literal["folder", "upload", "database"] = "upload"
+    display_name: str | None = None
+    table_name: str | None = None
+    schema_name: str | None = None
+    database_name: str | None = None
+    time_field: str | None = None
+    time_start: datetime | None = None
+    time_end: datetime | None = None
+    max_rows: int | None = None
+    column_info: list[dict[str, Any]] = Field(default_factory=list)
+    status: str = "UPLOADED"
+    error: str | None = None
+
+
+class AgentSchemaColumn(BaseModel):
+    name: str
+    data_type: str | None = None
+    nullable: bool | None = None
+    description: str | None = None
+    is_primary_key: bool = False
+
+
+class AgentSchemaTable(BaseModel):
+    schema_name: str | None = None
+    table_name: str
+    columns: list[AgentSchemaColumn] = Field(default_factory=list)
+    source_file: str
+
+
+class AgentAttribute(BaseModel):
+    entity_ref: str | None = None
+    attribute_name: str
+    value: Any
+    description: str | None = None
+    category: str | None = None
+    business_type: str | None = None
+    unit: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    decision: TimeSeriesDecisionStatus = TimeSeriesDecisionStatus.AUTO_ACCEPTED
+    source_files: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    model_version: str | None = None
+
+
+class AgentLLMResult(BaseModel):
+    summary: str
+    overall_status: str | None = None
+    attributes: list[AgentAttribute] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
     provider: str | None = None
     model: str | None = None
-    require_api: bool = False
+    generated_at: datetime | None = None
+
+
+class UnifiedResourceSource(BaseModel):
+    source_type: Literal["folder", "upload", "database"]
+    relative_path: str
+    file_format: str
+    file_size_bytes: int = 0
+    database_type: str | None = None
+    database_name: str | None = None
+    schema_name: str | None = None
+    table_name: str | None = None
+
+
+class UnifiedResourceClassification(BaseModel):
+    data_kind: Literal["time_series", "structured_table", "schema"]
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    reason: str
+
+
+class ResourceColumnProfile(BaseModel):
+    name: str
+    data_type: str | None = None
+    semantic_type: str | None = None
+    nullable: bool | None = None
+    is_primary_key: bool = False
+    is_identifier_candidate: bool = False
+    description: str | None = None
+
+
+class ResourceSchemaProfile(BaseModel):
+    row_count: int | None = None
+    column_count: int | None = None
+    columns: list[ResourceColumnProfile] = Field(default_factory=list)
+
+
+class UnifiedResourceQuality(BaseModel):
+    completeness: float | None = None
+    null_value_count: int | None = None
+    issue_count: int = 0
+    issues: list[str] = Field(default_factory=list)
+
+
+class ResourceProcessing(BaseModel):
+    status: Literal["completed", "failed"] = "completed"
+    parser_version: str = "unified_resource_v1"
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class UnifiedResourceReport(BaseModel):
+    """文件和数据库表共用的统一解析结果。"""
+
+    schema_version: str = "unified_resource_v1"
+    report_id: str
+    resource_id: str
+    resource_type: Literal["file", "database_table"]
+    resource_name: str
+    display_name: str
+    source: UnifiedResourceSource
+    classification: UnifiedResourceClassification
+    schema_profile: ResourceSchemaProfile
+    time_axis: TimeSeriesTimeAxis | None = None
+    entity_fields: list[str] = Field(default_factory=list)
+    metric_fields: list[str] = Field(default_factory=list)
+    quality: UnifiedResourceQuality
+    statistics: dict[str, Any] = Field(default_factory=dict)
+    attributes: list[AgentAttribute] = Field(default_factory=list)
+    summary: str
+    overall_status: str | None = None
+    recommendations: list[str] = Field(default_factory=list)
+    relationships: list[dict[str, Any]] = Field(default_factory=list)
+    processing: ResourceProcessing
+    generated_at: datetime
+
+
+class AgentToolTrace(BaseModel):
+    tool_name: str
+    status: str
+    summary: str
+
+
+class AgentParseResult(BaseModel):
+    schema_version: str = "agent_parse_result_v2"
+    run_id: str
+    status: AgentRunStatus
+    input_files: list[AgentInputFile] = Field(default_factory=list)
+    schema_tables: list[AgentSchemaTable] = Field(default_factory=list)
+    reports: list[UnifiedResourceReport] = Field(default_factory=list)
+    relationships: list[dict[str, Any]] = Field(default_factory=list)
+    tool_trace: list[AgentToolTrace] = Field(default_factory=list)
+    generated_at: datetime | None = None
+    error: str | None = None
+
+
+class AgentRunSummary(BaseModel):
+    run_id: str
+    status: AgentRunStatus
     current_step: str
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    event_count: int = 0
-    review_items: list[AgentReviewItem] = Field(default_factory=list)
-    error: str | None = None
-
-
-class AgentEventsResponse(BaseModel):
-    """增强型 Agent 执行事件列表。"""
-
-    agent_run_id: str
-    events: list[AgentEvent] = Field(default_factory=list)
-
-
-class ResourceStatusItem(BaseModel):
-    resource_code: str
-    sql_file: str
-    data_file: str | None = None
-    matched_by: Literal["auto", "manual", "none"] = "none"
-    status: ResourceStatus
-    progress: float = Field(default=0.0, ge=0.0, le=1.0)
-    field_count: int = 0
-    output_fields: list[str] = Field(default_factory=list)
-    parse_error: str | None = None
-    error: str | None = None
-
-
-class BatchStatusResponse(BaseModel):
-    batch_id: str
-    status: BatchStatus
-    sql_dialect: str
+    input_file_count: int = 0
+    schema_file_count: int = 0
+    timeseries_file_count: int = 0
+    report_count: int = 0
+    result_ready: bool = False
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    total_resources: int = 0
-    completed_resources: int = 0
-    failed_resources: int = 0
-    resources: list[ResourceStatusItem] = Field(default_factory=list)
-    error: str | None = Field(default=None, description="批次级失败原因")
+    error: str | None = None
 
 
-class BatchResultsResponse(BaseModel):
-    batch_id: str
-    status: BatchStatus
-    results: list[ResourceDescriptor] = Field(default_factory=list)
+class AgentRunHistoryItem(BaseModel):
+    run_id: str
+    label: str
+    status: AgentRunStatus
+    current_step: str
+    progress: float = Field(default=0.0, ge=0.0, le=1.0)
+    input_file_count: int = 0
+    report_count: int = 0
+    created_at: datetime
+    finished_at: datetime | None = None
+    error: str | None = None
+
+
+class ModelSettingsResponse(BaseModel):
+    base_url: str
+    model: str
+    configured: bool = False
+    key_masked: str | None = None
+    source: Literal["runtime", "environment", "none"] = "none"
+    expires_on: str | None = None
+
+
+class ModelConnectionRequest(BaseModel):
+    base_url: str = Field(min_length=1, max_length=1000)
+    model: str = Field(min_length=1, max_length=255)
+    api_key: str | None = Field(default=None, max_length=2048)
+
+
+class ModelConnectionResponse(BaseModel):
+    success: bool
+    message: str
 
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class DatabaseConnectRequest(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=3306, ge=1, le=65535)
+    username: str = Field(min_length=1, max_length=128)
+    password: SecretStr = Field(min_length=1, max_length=512)
+    database: str = Field(min_length=1, max_length=128)
+
+
+class DatabaseColumnInfo(BaseModel):
+    name: str
+    data_type: str
+    nullable: bool = True
+    is_primary_key: bool = False
+    description: str | None = None
+
+
+class DatabaseTableInfo(BaseModel):
+    schema_name: str
+    table_name: str
+    columns: list[DatabaseColumnInfo] = Field(default_factory=list)
+    default_time_column: str | None = None
+
+
+class DatabaseConnectionResponse(BaseModel):
+    connection_id: str
+    database_name: str
+    tables: list[DatabaseTableInfo] = Field(default_factory=list)
+    expires_at: datetime
+
+
+class DatabaseTableSelection(BaseModel):
+    schema_name: str | None = None
+    table_name: str
+    time_column: str | None = None
+    time_start: datetime | None = None
+    time_end: datetime | None = None
+
+
+class DatabaseRunRequest(BaseModel):
+    connection_id: str
+    tables: list[DatabaseTableSelection] = Field(min_length=1, max_length=200)
+    max_rows: int = Field(default=500, ge=1, le=500)
